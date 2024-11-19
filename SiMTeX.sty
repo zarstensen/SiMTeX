@@ -34,13 +34,13 @@
 % Createa NiceMatrix of size #2 x #3.
 % #4 is split based on the ',' character, and the resulting substrings are then put into the NiceMatrix.
 % #1 specifies the brackets around the NiceMatrix, so #1=b means [] as brackets, #1=p means () as brackets and so on...
-\newcommand{\smat}[4][b]{\directlua{SiMTeX.SmartMatrix("#2", "#3", "#4", '#1')}}
+\newcommand{\smat}[4][b]{\directlua{SiMTeX.SmartMatrix("#2", "#3", [[\detokenize{#4}]], '#1')}}
 % Create a NiceMatrix column vector from list of elements #2 split by ','.
 % Bracket type can optionally be specified as #1 
-\newcommand{\cvec}[2][b]{\directlua{SiMTeX.SmartMatrix('', '1', "#2", '#1')}}
+\newcommand{\cvec}[2][b]{\directlua{SiMTeX.SmartMatrix('', '1', [[\detokenize{#2}]], '#1')}}
 % Create a NiceMatrix row vector from list of elements #2 split by ','.
 % Bracket type can optionally be specified as #1
-\newcommand{\rvec}[2][b]{\directlua{SiMTeX.SmartMatrix('1', '', "#2", '#1')}}
+\newcommand{\rvec}[2][b]{\directlua{SiMTeX.SmartMatrix('1', '', [[\detokenize{#2}]], '#1')}}
 
 \endinput
 %%
