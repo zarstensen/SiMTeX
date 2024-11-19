@@ -1,0 +1,47 @@
+\NeedsTeXFormat{LaTeX2e}[1994/06/01]
+\ProvidesPackage{SiMTeX}
+  [2024/30/10 v1.0 General usefull tools created by the almighty Simon]
+
+\RequirePackage{minted}
+\RequirePackage{nicematrix}
+
+% Include lua library
+\directlua{SiMTeX = require('SiMTeX')}
+
+%%% Equation steps %%%
+\newcommand{\seq}[2][]{#1&\ &#2}
+\newcommand{\seqc}[3][]{#1&\ &#1 &&\quad(\text{#2})}
+\newcommand{\eqs}[2][\Leftrightarrow]{\\#1&\ &#2}
+\newcommand{\eqsc}[3][\Leftrightarrow]{\\#1&\ &#2 &&\quad(\text{#3})}
+
+%%% Row operations on matricies %%%
+
+\newcommand{\mrowop}[1]{
+\begin{matrix}
+\longrightarrow \\
+#1
+\end{matrix}
+}
+
+\newcommand{\amrowop}[1]{
+&
+\eop{#1}
+&
+}
+
+%%% Smart matrix %%
+
+% Createa NiceMatrix of size #2 x #3.
+% #4 is split based on the ',' character, and the resulting substrings are then put into the NiceMatrix.
+% #1 specifies the brackets around the NiceMatrix, so #1=b means [] as brackets, #1=p means () as brackets and so on...
+\newcommand{\smat}[4][b]{\directlua{SiMTeX.SmartMatrix("#2", "#3", "#4", '#1')}}
+% Create a NiceMatrix column vector from list of elements #2 split by ','.
+% Bracket type can optionally be specified as #1 
+\newcommand{\cvec}[2][b]{\directlua{SiMTeX.SmartMatrix('', '1', "#2", '#1')}}
+% Create a NiceMatrix row vector from list of elements #2 split by ','.
+% Bracket type can optionally be specified as #1
+\newcommand{\rvec}[2][b]{\directlua{SiMTeX.SmartMatrix('1', '', "#2", '#1')}}
+
+\endinput
+%%
+%% End of file `SiMTeX.sty'.
