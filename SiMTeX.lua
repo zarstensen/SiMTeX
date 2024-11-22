@@ -1,9 +1,9 @@
 local P = {}
 
-P.SmartMatrixSeparator = ','
+P.smart_matrix_separator = ','
+P.smart_matrix_env_stack = {}
 
 function P.SmartMatrix(rows, columns, contents, brackets)
-
     columns = tonumber(columns)
     rows = tonumber(rows)
 
@@ -40,24 +40,42 @@ function P.SmartMatrix(rows, columns, contents, brackets)
         columns = #elems / rows
     end
 
-    tex.print(string.format("\\begin{%sNiceMatrix}", brackets))
+    local matrix_env = "matrix"
+
+    if #P.smart_matrix_env_stack > 0 then
+        matrix_env = P.smart_matrix_env_stack[#P.smart_matrix_env_stack]
+    end
+
+    local latex_out = { }
+    table.insert(latex_out, string.format("\\begin{%s%s}", brackets, matrix_env))
     
     for r=0, rows - 1 do
         for c=0, columns - 1 do 
-            tex.print(elems[r * columns + c + 1])
+            table.insert(latex_out, elems[r * columns + c + 1])
 
             if c ~= columns - 1 then
-                tex.print('&')
+                table.insert(latex_out, '&')
             end
         end
 
         if r ~= rows - 1 then
-            tex.print('\\\\')
+            table.insert(latex_out, '\\\\')
         end
     end
 
-    tex.print(string.format("\\end{%sNiceMatrix}", brackets))
+    table.insert(latex_out, string.format("\\end{%s%s}", brackets, matrix_env))
 
+    tex.print(table.concat(latex_out))
+end
+
+function P.pushSmartMatEnv(env)
+    table.insert(P.smart_matrix_env_stack, env)
+end
+
+function P.popSmartMatEnv()
+    if #P.smart_matrix_env_stack > 0 then
+        table.remove(P.smart_matrix_env_stack, #P.smart_matrix_env_stack)
+    end
 end
 
 return P

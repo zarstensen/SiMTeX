@@ -30,6 +30,13 @@
 
 %%% Smart matrix %%
 
+% Push a specific matrix environment onto the current environment stack.
+% This environment will be used until a new one is pushed ontop, or \popSMatEnv is met.
+\newcommand{\pushSMatEnv}[1]{\directlua{SiMTeX.pushSmartMatEnv("#1")}}
+% Removes the current matrix environment from the environment stack.
+% The environment directly under it will be the new top of the stack.
+\newcommand{\popSMatEnv}{\directlua{SiMTeX.popSmartMatEnv()}}
+
 % Createa NiceMatrix of size #2 x #3.
 % #4 is split based on the ',' character, and the resulting substrings are then put into the NiceMatrix.
 % #1 specifies the brackets around the NiceMatrix, so #1=b means [] as brackets, #1=p means () as brackets and so on...
@@ -40,6 +47,19 @@
 % Create a NiceMatrix row vector from list of elements #2 split by ','.
 % Bracket type can optionally be specified as #1
 \newcommand{\rvec}[2][b]{\directlua{SiMTeX.SmartMatrix('1', '', [[\detokenize{#2}]], '#1')}}
+
+% All smat cvec and rvec's inside this environment will have their column widths match
+% Use with caution, as this slows compile times down.
+\newenvironment{SMatAligned}{
+\NiceMatrixOptions{no-cell-nodes} % only for speedup
+\pushSMatEnv{NiceMatrix}
+\begin{NiceMatrixBlock}[auto-columns-width]
+}
+% CONTENTS
+{
+\end{NiceMatrixBlock}
+\popSMatEnv
+}
 
 \endinput
 %%
