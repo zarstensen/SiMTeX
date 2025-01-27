@@ -3,15 +3,30 @@
   [2024/11/19 v1.0 General usefull tools created by the almighty Simon]
 
 \RequirePackage{nicematrix}
+% for loading potentially locally installed lua libraries.
+% usefull for overleaf for example, where you cannot setup your docker image before compiling.
+\RequirePackage{luapackageloader}
+
+% options
+\newcommand{\luamoduledir}{}
+\DeclareOption*{\let \luamoduledir \CurrentOption}
+\ProcessOptions\relax
 
 % Include lua library
-\directlua{SiMTeX = require('SiMTeX')}
+\directlua{
+  SiMTeX = require('SiMTeX')
+  SiMTeX.initialize("\luamoduledir")
+  }
+
+
 
 %%% Equation steps %%%
 \newcommand{\seq}[2][]{#1&\ &#2}
 \newcommand{\seqc}[3][]{#1&\ &#1 &&\quad(\text{#2})}
 \newcommand{\eqs}[2][\Leftrightarrow]{\\#1&\ &#2}
 \newcommand{\eqsc}[3][\Leftrightarrow]{\\#1&\ &#2 &&\quad(\text{#3})}
+
+
 
 %%% Row operations on matricies %%%
 
@@ -27,6 +42,8 @@
 \eop{#1}
 &
 }
+
+
 
 %%% Smart matrix %%
 
@@ -60,6 +77,42 @@
 \end{NiceMatrixBlock}
 \popSMatEnv
 }
+
+
+
+%%% Code Inclusion %%%
+
+% inserts the given contents into the verbatim environment at the given expression in the next \include*Scope 
+\newcommand{\includeAtExpression}{def}
+
+% inserts the given contents into the verbatim environment at the given line number in the next \include*Scope
+\newcommand{\includeAtLine}{def}
+
+
+% inserts all code in the passed scope in the passed file into a "minted" or other specified environment
+\newcommand{\includeCScope}[2]{\directlua{SimTex.CodeInclude.includeC("#2", "#1")}
+}
+
+% finds the scope given, and includes everything between the specified first line and last line contents.
+% line number trimming can be specified in the minted environment arguments.
+\newcommand{\includeTrimmedCScope}[2]{\directlua{SimTex.CodeInclude.includeC("#2", "#1")}}
+
+
+\newcommand{\includePythonScope}[2]{\directlua{SimTex.CodeInclude.includePython("#2", "#1")}}
+
+
+
+\newcommand{\includeTrimmedPythonScope}[2]{\directlua{SimTex.CodeInclude.includePython("#2", "#1")}}
+
+
+%%% Python execution %%%
+
+% takes a file, and a result name
+% file is only executed ONCE, all variables before the first execPython
+\newcommand{\execPython}[3]{\directlua{SiMTeX.PythonExec.execPythonFunc("#1", "#2", "#3")}}
+
+\AtEndDocument{\directlua{SiMTeX.PythonExec.cleanup()}}
+
 
 \endinput
 %%

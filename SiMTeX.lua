@@ -1,5 +1,22 @@
 local P = {}
 
+-- forward declare packages which will be setup in SiMTeX.initialize()
+local socket = nil
+
+
+local P = {}
+
+function P.initialize(module_dir)
+    if module_dir:match("^%s*$") == nil then
+        local lua_version = _VERSION:match("Lua (%d+%.%d+)")
+        
+        package.path = module_dir .. "/share/lua/" .. lua_version .. "/?.lua;" .. package.path
+        package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.so;" .. package.cpath
+    end
+
+    socket = require("socket")
+end
+
 -- Smart Matrix
 
 local SMat = {}
@@ -88,8 +105,54 @@ P.SMat = SMat
 
 local CodeInc = {}
 
+-- Returns the starting and ending index of the line, where the given expression is present in the passed string
+-- Returns nil if no such line could be found.
+function CodeInc.findLineWithExpr(text, expr)
+    local current_index = 1
+
+    -- Loop through each line of the passed string
+    while true do
+        local newline_index = text:find("\n", 1, true)
+
+        if newline_index ~= nil then
+            local line = text:sub(1, newline_index)
+            local found_expr_index = line:find(expr, 1, true)
+            if found_expr_index ~= nil then
+                return current_index, current_index + #line - 2
+            else
+                current_index = current_index + #line
+                text = text:sub(newline_index + 1)
+            end
+        elseif text:find(expr, 1, true) then
+            return current_index, #expr
+        else
+            return nil
+        end
+    end
+end
+
+function CodeInc.calcIndentation(line)
+    return #line:match("^%s*")
+end
+
+function CodeInc.extractPythonScope(code, scope_start)
+    -- find scope start
+
+    local line_start, line_end = CodeInc.findLineWithExpr(code, scope_start)
+    local scope_start_line = code:sub(line_start, line_end)
+
+    local scope_indentation = CodeInc.calcIndentation(scope_start_line)
+
+
+    -- loop through lines until we find a non empty line, that is a line which has something different that whitespace
+    -- which has the same indentation, or less, than the scope start.
+
+
+
+    -- exclude this line, and go back till the nearest non empty line, different from code_start.
+end
+
 function CodeInc.extractCStyleScope(code, scope_start)
-    
     local line_start, line_end = CodeInc.findLineWithExpr(code, scope_start)
 
     if line_start == nil then
@@ -102,7 +165,7 @@ function CodeInc.extractCStyleScope(code, scope_start)
     local scope_start = nil
     local scope_end = nil
 
-    for i=line_start, #code do
+    for i = line_start, #code do
         if code[i] == '{' then
             scope_depth = scope_depth + 1
             scope_start = i
@@ -118,8 +181,7 @@ function CodeInc.extractCStyleScope(code, scope_start)
 
     local is_inside_string = false
 
-    for i=scope_start+1, #code do
-
+    for i = scope_start + 1, #code do
         if code[i] == '{' then
             scope_depth = scope_depth + 1
         elseif code[i] == '}' then
@@ -135,30 +197,96 @@ function CodeInc.extractCStyleScope(code, scope_start)
     return code:sub(scope_start, scope_end)
 end
 
--- Returns the starting and ending index of the line, where the given expression is present in the passed string
--- Returns nil if no such line could be found.
-function CodeInc.findLineWithExpr(text, expr)
-    local current_index = 1
+P.CodeInc = CodeInc
 
-    -- Loop through each line of the passed string
-    while true do
-        local newline_index = text:find("\n", 1, true)
+-- Python Exec
 
-        if newline_index ~= nil then
-            local line = text:sub(1, newline_index)
-            local found_expr_index = line:find(expr, 1, true)
-            if found_expr_index ~= nil and found_expr_index == 1 then
-                return current_index, current_index + #line - 2
-            else
-                current_index = current_index + #line
-                text = text:sub(newline_index + 1)
-            end
-        elseif text:find(expr, 1, true) then
-            return current_index, #expr
-        else
-            return nil
+PythonExec = {
+    python_procs = {}
+}
+
+function PythonExec.execPythonFunc(file_name, func_name, args)
+    -- initialize has not been called, this will not work.
+    if socket == nil then
+        return
+    end
+
+    -- move this to another function
+    if not PythonExec.python_procs[file_name] then
+        
+        -- create python process
+        local python_pipe, err = io.popen("py " .. file_name, "w")
+        
+        if python_pipe == nil then
+            error(("Could not open python file %s: %s"):format(file_name, err))
+            return
         end
+        
+        PythonExec.python_procs[file_name] = {
+            pipe = python_pipe
+        }
+
+        -- setup server - client connection
+
+        local comm_server, err = socket.bind("127.0.0.1", 0)
+        comm_server:settimeout(5)
+        
+        if not comm_server then
+            error(("Could not bind to port: %s"):format(err))
+            return
+        end
+
+        local ip, port = comm_server:getsockname()
+
+        print(ip, port)
+
+        python_pipe:write(ip .. '\n' .. port .. '\n')
+        python_pipe:flush()
+
+        local comm_client, err = comm_server:accept()
+        comm_client:settimeout(30)
+
+        if not comm_client then
+            error(("Could not accept connection: %s"):format(err))
+            return
+        end
+
+        PythonExec.python_procs[file_name].comm_server = comm_server
+        PythonExec.python_procs[file_name].comm_client = comm_client
+
+        tex.print("SUCCESSFULLY CONNECTED")
+    end
+
+    -- we are guaranteed to have a connection by now
+    local client = PythonExec.python_procs[file_name].comm_client
+
+    PythonExec.sendMessage(client, func_name)
+    PythonExec.sendMessage(client, args)
+    tex.print(PythonExec.recvMessage(client))
+end
+
+function PythonExec.sendMessage(socket, message)
+    local message_length = string.pack(">I4", #message)
+    print("SENDING ", message)
+    socket:send(message_length .. message)
+end
+
+function PythonExec.recvMessage(socket)
+    local message_length = socket:receive(4)
+    local length = string.unpack(">I4", message_length)
+    return socket:receive(length)
+end
+
+function PythonExec.cleanup()
+    for _, proc in pairs(PythonExec.python_procs) do
+        if proc.comm_client then
+            proc.comm_client:close()
+        end
+
+        proc.pipe:close()
     end
 end
+
+P.PythonExec = PythonExec
 
 return P
