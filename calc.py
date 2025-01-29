@@ -4,5 +4,9 @@ from sympy import *
 def addNumbers(a, b):
     return "Numbers are: " + str(a + b)
 
-SiMTeX.register_cmd(addNumbers, lambda i: ( int(x) for x in i.split(' ')))
+def vsum(*args):
+    return sum(args)
+
+SiMTeX.register_cmd(addNumbers, SiMTeXInput.multValues([int, int]))
+SiMTeX.register_cmd(vsum, SiMTeXInput.multValues(float, sep=','))
 SiMTeX.run()

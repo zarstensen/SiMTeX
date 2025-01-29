@@ -12,6 +12,47 @@ function P.initialize(module_dir)
         
         package.path = module_dir .. "/share/lua/" .. lua_version .. "/?.lua;" .. package.path
         package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.so;" .. package.cpath
+        package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.dll;" .. package.cpath
+    end
+
+    -- IM DOING IT MYSELF YOU DUMB BIATCH
+
+    table.insert(package.searchers,  function(name)
+        local file, err = package.searchpath(name,package.path)
+        if err then
+          return string.format("[lua searcher]: module not found: '%s'%s", name, err)
+        else
+          return loadfile(file)
+        end
+      end)
+
+    table.insert(package.searchers,  function(name)
+        local file, err = package.searchpath(name, package.cpath)
+        if err then
+          return string.format("[lua C searcher]: module not found: '%s'%s", name,err)
+        else
+          local symbol = name:gsub("%.","_")
+          print("LOADING: " .. file)
+          print(package.loadlib(file, "*"))
+          print(package.loadlib(file, "luaopen_"..symbol))
+          return package.loadlib(file, "luaopen_"..symbol)
+        end
+    end)
+
+    for k, searcher in pairs(package.searchers) do
+        print("SEARCHER: " .. tostring(k) .. " : " .. tostring(searcher))
+        local tmp = package.searchers[k]
+        package.searchers[k] = function(arg)
+            print("CALLING " .. tostring(k))
+            local res = tmp(arg)
+
+            if res == nil then
+                res = "nil"
+            end
+
+            print("RESULT IS: " .. tostring(res))
+            return tmp(arg)
+        end
     end
 
     socket = require("socket")
@@ -244,17 +285,17 @@ function PythonExec.execPythonFunc(file_name, func_name, args)
         python_pipe:flush()
 
         local comm_client, err = comm_server:accept()
-        comm_client:settimeout(30)
-
+        
         if not comm_client then
             error(("Could not accept connection: %s"):format(err))
             return
         end
+        
+        comm_client:settimeout(30)
 
         PythonExec.python_procs[file_name].comm_server = comm_server
         PythonExec.python_procs[file_name].comm_client = comm_client
-
-        tex.print("SUCCESSFULLY CONNECTED")
+        print("Connected")
     end
 
     -- we are guaranteed to have a connection by now
@@ -262,7 +303,19 @@ function PythonExec.execPythonFunc(file_name, func_name, args)
 
     PythonExec.sendMessage(client, func_name)
     PythonExec.sendMessage(client, args)
-    tex.print(PythonExec.recvMessage(client))
+    
+    local status = PythonExec.recvMessage(client)
+    local response = PythonExec.recvMessage(client)
+
+    for line in response:gmatch("[^\r\n]+") do
+        tex.print(line)
+    end
+
+    if status == "error" then
+        -- pdf should still compile,
+        -- but prevent caching somehow
+        tex.print("\\errmessage{ERRMSG}")
+    end
 end
 
 function PythonExec.sendMessage(socket, message)
