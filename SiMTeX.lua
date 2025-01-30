@@ -198,7 +198,16 @@ function PythonExec.execPythonFunc(file_name, func_name, args)
     if not PythonExec.python_procs[file_name] then
         -- create python process
         print("PYTHON\tSTART")
-        local python_pipe, err = io.popen("py " .. file_name, "w")
+
+        local py_exec = ""
+
+        if package.config:sub(1, 1) == '\\' then
+            py_exec = "py"
+        else
+            py_exec = "python"
+        end
+
+        local python_pipe, err = io.popen(py_exec .. " " .. file_name, "w")
         
         if python_pipe == nil then
             error(("Could not open python file %s: %s"):format(file_name, err))
