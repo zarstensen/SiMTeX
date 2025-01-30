@@ -1,7 +1,10 @@
 import socket
+import time
 import traceback
 from typing import Callable
 from inspect import signature
+import io
+import sys
 
 ## SiMTeXInput provides a series of default input parsers for the SiMTeX class.
 class SiMTeXInput:
@@ -49,7 +52,12 @@ class SiMTeX:
     # holds all currently registered functions.
     # each entry should contain a cmd field, holding the function itself,
     # as well as an input_parser field, holding the function which will parse the input given from latex.
-    cmds = {}
+    cmds = {
+        "exit": {
+            "cmd": exit,
+            "input_parser": lambda i: (),
+        }
+    }
 
     # Register a function to be callable from a latex document.
     # optionally provide an input parser, which transform the input given from latex, into input suitable for the function.
@@ -125,55 +133,74 @@ class SiMTeX:
     @staticmethod
     def run():
         # receive connection info from build process throug stdin.
-        ip = input()
-        port = int(input())
+        in_file_path = sys.stdin.readline().strip()
+        out_file_path = sys.stdin.readline().strip()
 
-        # setup TCP client socket.
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((ip, port))
-        client.setblocking(True)
+        in_file = open(in_file_path, "rb")
+        out_file = open(out_file_path, "wb")
+
 
         # start message loop.
         while True:
             # receive exec info from latex.
-            func_name = SiMTeX.recv_message(client)
-            args = SiMTeX.recv_message(client)
+            func_name = SiMTeX.recv_message(in_file)
+            args = SiMTeX.recv_message(in_file)
 
             # run command and send responses to latex.
             try:
                 output = SiMTeX.run_cmd(func_name, args)
-                SiMTeX.send_message(client, "success")
-                SiMTeX.send_message(client, output)
+                SiMTeX.send_message(out_file, "success")
+                SiMTeX.send_message(out_file, output)
+                
             except Exception as e:
                 err_msg = (
                     "\n\n\\begin{lstlisting}[breaklines=true]\n"
                     + traceback.format_exc()
                     + "\n\\end{lstlisting}\n\n"
                 )
-                SiMTeX.send_message(client, "error")
-                SiMTeX.send_message(client, err_msg)
+                SiMTeX.send_message(out_file, "error")
+                SiMTeX.send_message(out_file, err_msg)
+                
+        in_file.close()
+        out_file.close()
 
     # send a message through a TCP client socket.
     @staticmethod
-    def send_message(client: socket.socket, message: str):
-
+    def send_message(file: io.TextIOWrapper, message: str):
+        print("PYTHON\tSEND")
+        
         message = str(message)
         length = len(message)
 
-        client.sendall(length.to_bytes(4, byteorder="big"))
-        client.sendall(message.encode("utf-8"))
+        file.write(length.to_bytes(4, byteorder="big"))
+        file.write(message.encode("utf-8"))
+        file.flush()
 
     # receive a message through a TCP client socket.
     # format is assumed to start with a 4 byte integer, representing the length of the message,
     # followed by the message itself.
     @staticmethod
-    def recv_message(client: socket.socket) -> str:
-        length_bytes = client.recv(4)
-
-        if not length_bytes:
-            return None
-
+    def recv_message(file: io.TextIOWrapper) -> str:
+        print("PYTHON\tRECEIVE")
+        
+        length_bytes = SiMTeX.recv_bytes(file, 4)
         length = int.from_bytes(length_bytes, byteorder="big")
-        message = client.recv(length)
+        message = SiMTeX.recv_bytes(file, length)
 
         return message.decode("utf-8")
+
+    @staticmethod
+    def recv_bytes(file: io.BufferedReader, byte_count: int, timeout: int = 10) -> bytes:
+        msg = b""
+        start_time = time.time()
+
+        while byte_count > 0:
+            data = file.read(byte_count)
+            if len(data) > 0:
+                msg += data
+                byte_count -= len(data)
+            else:
+                if time.time() - start_time > timeout:
+                    raise TimeoutError(f"Timeout while reading from file '{file}' after {timeout} seconds.")
+        
+        return msg

@@ -1,54 +1,5 @@
 local P = {}
 
--- forward declare packages which will be setup in SiMTeX.initialize()
-local socket = nil
-
--- custom implementation of lua's built in searcher functions for the path and cpath variables.
-local function lua_src_searcher(name)
-    local file, err = package.searchpath(name, package.path)
-    if err then
-        return string.format("[lua source (path) searcher]: module not found: '%s'%s", name, err)
-    else
-        return loadfile(file)
-    end
-end
-
-local function lua_bin_searcher(name)
-    local file, err = package.searchpath(name, package.cpath)
-    if file == nil then
-        return string.format("[lua binary (cpath) searcher]: module not found: '%s'%s", name, err)
-    else
-        local symbol = name:gsub("%.", "_")
-        return package.loadlib(file, "luaopen_" .. symbol)
-    end
-end
-
--- Sets up package paths and searchers to support local module directories.
--- if module dir is an empty string, no additional paths are added,
--- otherwise it is assumed the module dir was created with a luarocks --tree like function call.
---
--- This function should be called before any othe function is called from this module.
-function P.initialize(module_dir)
-    -- update package paths with local module dir folders.
-    if module_dir:match("^%s*$") == nil then
-        local lua_version = _VERSION:match("Lua (%d+%.%d+)")
-
-        package.path = module_dir .. "/share/lua/" .. lua_version .. "/?.lua;" .. package.path
-
-        package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.so;" .. package.cpath
-        package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.dll;" .. package.cpath
-    end
-
-    -- luatex replaces luas built in searchers with some wierd KPSE searchers,
-    -- which do not make use of the package.path or package.cpath variables,
-    -- so we have to add lua's built in searchers back in for the above modifications to take effect.
-    table.insert(package.searchers, lua_src_searcher)
-    table.insert(package.searchers, lua_bin_searcher)
-
-    -- now require modules.
-    socket = require("socket")
-end
-
 -- Smart Matrix
 
 local SMat = {}
@@ -242,67 +193,69 @@ PythonExec = {
 --
 -- If file_name has not been passed before, a new python process is created for this file.
 function PythonExec.execPythonFunc(file_name, func_name, args)
-    -- initialize has not been called, this will not work.
-    if socket == nil then
-        return
-    end
-
     -- check if we already have a python process for this file,
     -- that way we avoid the initial runtime spent on importing modules for each execPythonFunc call.
     if not PythonExec.python_procs[file_name] then
         -- create python process
+        print("PYTHON\tSTART")
         local python_pipe, err = io.popen("py " .. file_name, "w")
-
+        
         if python_pipe == nil then
             error(("Could not open python file %s: %s"):format(file_name, err))
             return
         end
-
+        
         PythonExec.python_procs[file_name] = {
             pipe = python_pipe
         }
-
-        -- setup server <-> client connection between the just started python process.
-
-        local comm_server, err = socket.bind("127.0.0.1", 0)
-        comm_server:settimeout(5)
-
-        if not comm_server then
-            error(("Could not bind to port: %s"):format(err))
+        
+        -- setup file communication.
+        
+        -- first, get a temporary file to use for communication.
+        print("COMM\tFILE OPEN START")
+        
+        local out_file_path = os.tmpname()
+        local out_file, err = io.open(out_file_path, "wb")
+        
+        if not out_file then
+            error(("Could not open file %s: %s"):format(out_file_path, err))
             return
         end
-
-        local ip, port = comm_server:getsockname()
-
-        -- send connection info to the python process.
-        python_pipe:write(ip .. '\n' .. port .. '\n')
+        
+        local in_file_path = os.tmpname()
+        io.open(in_file_path, "w"):close()
+        local in_file, err = io.open(in_file_path, "rb")
+        
+        if not in_file then
+            error(("Could not open file %s: %s"):format(out_file_path, err))
+            return
+        end
+        
+        print("STDIN\tSTART")
+        -- send file info to the python process.
+        python_pipe:write(out_file_path .. "\n")
+        python_pipe:write(in_file_path .. "\n")
         python_pipe:flush()
-
-        -- wait for connection from the python process.
-        local comm_client, err = comm_server:accept()
-
-        if not comm_client then
-            error(("Could not accept connection: %s"):format(err))
-            return
-        end
-
-        comm_client:settimeout(30)
+        print("STDIN\tEND")
 
         -- finally, cache the connection, so we do not have to do this again.
-        PythonExec.python_procs[file_name].comm_server = comm_server
-        PythonExec.python_procs[file_name].comm_client = comm_client
+        PythonExec.python_procs[file_name].in_file_path = in_file_path
+        PythonExec.python_procs[file_name].in_file = in_file
+        PythonExec.python_procs[file_name].out_file_path = out_file_path
+        PythonExec.python_procs[file_name].out_file = out_file
     end
 
     -- we are guaranteed to have a connection by now
-    local client = PythonExec.python_procs[file_name].comm_client
+    local in_file = PythonExec.python_procs[file_name].in_file
+    local out_file = PythonExec.python_procs[file_name].out_file
 
     -- send function info to python process.
-    PythonExec.sendMessage(client, func_name)
-    PythonExec.sendMessage(client, args)
+    PythonExec.sendMessage(out_file, func_name)
+    PythonExec.sendMessage(out_file, args)
 
     -- receive results.
-    local status = PythonExec.recvMessage(client)
-    local response = PythonExec.recvMessage(client)
+    local status = PythonExec.recvMessage(in_file)
+    local response = PythonExec.recvMessage(in_file)
 
     -- tex.print is weird with newlines in strings,
     -- so we just call tex.print for each newline to avoid these issues.
@@ -316,27 +269,58 @@ function PythonExec.execPythonFunc(file_name, func_name, args)
 end
 
 -- send a message via. a TCP socket.
-function PythonExec.sendMessage(socket, message)
+function PythonExec.sendMessage(file, message)
+    print("LUA\tSEND")
     local message_length = string.pack(">I4", #message)
-    socket:send(message_length .. message)
+    file:write(message_length .. message)
+    file:flush()
 end
 
 -- receive a message via. a TCP socket.
 -- format assumed is first 4 bytes is length of the message, followed by the message itself.
-function PythonExec.recvMessage(socket)
-    local message_length = socket:receive(4)
+function PythonExec.recvMessage(file)
+    print("LUA\tRECV")
+    local message_length = PythonExec.recvBytes(file, 4)
     local length = string.unpack(">I4", message_length)
-    return socket:receive(length)
+
+    return PythonExec.recvBytes(file, length)
+end
+
+function PythonExec.recvBytes(file, byte_count, timeout)
+    if timeout == nil then
+        timeout = 10
+    end
+
+    local msg = ""
+
+    local start_time = os.clock()
+
+    while byte_count > 0 do
+        local data = file:read(byte_count)
+        if data then
+            msg = msg .. data
+            byte_count = byte_count - #data
+        else
+            if os.clock() - start_time > timeout then
+                error(string.format("Timeout while reading from file '%s' after %d seconds.", file, timeout))
+            end
+        end
+    end
+
+    return msg
 end
 
 -- closes all currently open connections, and shutdown all python processes.
 function PythonExec.cleanup()
-    for _, proc in pairs(PythonExec.python_procs) do
-        if proc.comm_client then
-            proc.comm_client:close()
-        end
-
+    for python_file, proc in pairs(PythonExec.python_procs) do
+        -- ok just send an exit signal here to the process.
+        PythonExec.sendMessage(proc.out_file, "exit")
+        PythonExec.sendMessage(proc.out_file, "")
         proc.pipe:close()
+        proc.in_file:close()
+        proc.out_file:close()
+        os.remove(proc.in_file_path)
+        os.remove(proc.out_file_path)
     end
 end
 
