@@ -3,58 +3,49 @@ local P = {}
 -- forward declare packages which will be setup in SiMTeX.initialize()
 local socket = nil
 
+-- custom implementation of lua's built in searcher functions for the path and cpath variables.
+local function lua_src_searcher(name)
+    local file, err = package.searchpath(name, package.path)
+    if err then
+        return string.format("[lua source (path) searcher]: module not found: '%s'%s", name, err)
+    else
+        return loadfile(file)
+    end
+end
 
-local P = {}
+local function lua_bin_searcher(name)
+    local file, err = package.searchpath(name, package.cpath)
+    if file == nil then
+        return string.format("[lua binary (cpath) searcher]: module not found: '%s'%s", name, err)
+    else
+        local symbol = name:gsub("%.", "_")
+        return package.loadlib(file, "luaopen_" .. symbol)
+    end
+end
 
+-- Sets up package paths and searchers to support local module directories.
+-- if module dir is an empty string, no additional paths are added,
+-- otherwise it is assumed the module dir was created with a luarocks --tree like function call.
+--
+-- This function should be called before any othe function is called from this module.
 function P.initialize(module_dir)
+    -- update package paths with local module dir folders.
     if module_dir:match("^%s*$") == nil then
         local lua_version = _VERSION:match("Lua (%d+%.%d+)")
-        
+
         package.path = module_dir .. "/share/lua/" .. lua_version .. "/?.lua;" .. package.path
+
         package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.so;" .. package.cpath
         package.cpath = module_dir .. "/lib/lua/" .. lua_version .. "/?.dll;" .. package.cpath
     end
 
-    -- IM DOING IT MYSELF YOU DUMB BIATCH
+    -- luatex replaces luas built in searchers with some wierd KPSE searchers,
+    -- which do not make use of the package.path or package.cpath variables,
+    -- so we have to add lua's built in searchers back in for the above modifications to take effect.
+    table.insert(package.searchers, lua_src_searcher)
+    table.insert(package.searchers, lua_bin_searcher)
 
-    table.insert(package.searchers,  function(name)
-        local file, err = package.searchpath(name,package.path)
-        if err then
-          return string.format("[lua searcher]: module not found: '%s'%s", name, err)
-        else
-          return loadfile(file)
-        end
-      end)
-
-    table.insert(package.searchers,  function(name)
-        local file, err = package.searchpath(name, package.cpath)
-        if err then
-          return string.format("[lua C searcher]: module not found: '%s'%s", name,err)
-        else
-          local symbol = name:gsub("%.","_")
-          print("LOADING: " .. file)
-          print(package.loadlib(file, "*"))
-          print(package.loadlib(file, "luaopen_"..symbol))
-          return package.loadlib(file, "luaopen_"..symbol)
-        end
-    end)
-
-    for k, searcher in pairs(package.searchers) do
-        print("SEARCHER: " .. tostring(k) .. " : " .. tostring(searcher))
-        local tmp = package.searchers[k]
-        package.searchers[k] = function(arg)
-            print("CALLING " .. tostring(k))
-            local res = tmp(arg)
-
-            if res == nil then
-                res = "nil"
-            end
-
-            print("RESULT IS: " .. tostring(res))
-            return tmp(arg)
-        end
-    end
-
+    -- now require modules.
     socket = require("socket")
 end
 
@@ -246,32 +237,36 @@ PythonExec = {
     python_procs = {}
 }
 
+-- Tries to execute the given SiMTeX registered python function from the given file,
+-- with the given arguments.
+--
+-- If file_name has not been passed before, a new python process is created for this file.
 function PythonExec.execPythonFunc(file_name, func_name, args)
     -- initialize has not been called, this will not work.
     if socket == nil then
         return
     end
 
-    -- move this to another function
+    -- check if we already have a python process for this file,
+    -- that way we avoid the initial runtime spent on importing modules for each execPythonFunc call.
     if not PythonExec.python_procs[file_name] then
-        
         -- create python process
         local python_pipe, err = io.popen("py " .. file_name, "w")
-        
+
         if python_pipe == nil then
             error(("Could not open python file %s: %s"):format(file_name, err))
             return
         end
-        
+
         PythonExec.python_procs[file_name] = {
             pipe = python_pipe
         }
 
-        -- setup server - client connection
+        -- setup server <-> client connection between the just started python process.
 
         local comm_server, err = socket.bind("127.0.0.1", 0)
         comm_server:settimeout(5)
-        
+
         if not comm_server then
             error(("Could not bind to port: %s"):format(err))
             return
@@ -279,57 +274,62 @@ function PythonExec.execPythonFunc(file_name, func_name, args)
 
         local ip, port = comm_server:getsockname()
 
-        print(ip, port)
-
+        -- send connection info to the python process.
         python_pipe:write(ip .. '\n' .. port .. '\n')
         python_pipe:flush()
 
+        -- wait for connection from the python process.
         local comm_client, err = comm_server:accept()
-        
+
         if not comm_client then
             error(("Could not accept connection: %s"):format(err))
             return
         end
-        
+
         comm_client:settimeout(30)
 
+        -- finally, cache the connection, so we do not have to do this again.
         PythonExec.python_procs[file_name].comm_server = comm_server
         PythonExec.python_procs[file_name].comm_client = comm_client
-        print("Connected")
     end
 
     -- we are guaranteed to have a connection by now
     local client = PythonExec.python_procs[file_name].comm_client
 
+    -- send function info to python process.
     PythonExec.sendMessage(client, func_name)
     PythonExec.sendMessage(client, args)
-    
+
+    -- receive results.
     local status = PythonExec.recvMessage(client)
     local response = PythonExec.recvMessage(client)
 
+    -- tex.print is weird with newlines in strings,
+    -- so we just call tex.print for each newline to avoid these issues.
     for line in response:gmatch("[^\r\n]+") do
         tex.print(line)
     end
 
     if status == "error" then
-        -- pdf should still compile,
-        -- but prevent caching somehow
-        tex.print("\\errmessage{ERRMSG}")
+        error(response)
     end
 end
 
+-- send a message via. a TCP socket.
 function PythonExec.sendMessage(socket, message)
     local message_length = string.pack(">I4", #message)
-    print("SENDING ", message)
     socket:send(message_length .. message)
 end
 
+-- receive a message via. a TCP socket.
+-- format assumed is first 4 bytes is length of the message, followed by the message itself.
 function PythonExec.recvMessage(socket)
     local message_length = socket:receive(4)
     local length = string.unpack(">I4", message_length)
     return socket:receive(length)
 end
 
+-- closes all currently open connections, and shutdown all python processes.
 function PythonExec.cleanup()
     for _, proc in pairs(PythonExec.python_procs) do
         if proc.comm_client then

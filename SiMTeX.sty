@@ -108,12 +108,12 @@
 
 %%% Python execution %%%
 
-% takes a file, and a result name
-% file is only executed ONCE, all variables before the first execPython
+% Executes a function registered with the SiMTeX module (arg 2), inside the given file (arg 1),
+% with the given arguments (arg 3).
 \newcommand{\execPython}[3]{\directlua{SiMTeX.PythonExec.execPythonFunc("#1", "#2", "#3")}}
 
+% Setup cleanup of all the opened python processes at end of document compilation.
 \AtEndDocument{\directlua{SiMTeX.PythonExec.cleanup()}}
-
 
 \endinput
 %%
